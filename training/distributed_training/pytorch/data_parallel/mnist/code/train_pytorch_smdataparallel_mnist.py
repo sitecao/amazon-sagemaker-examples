@@ -14,7 +14,6 @@
 from __future__ import print_function
 
 import argparse
-from packaging.version import Version
 import os
 import time
 
@@ -30,39 +29,6 @@ from torchvision import datasets, transforms
 
 # Network definition
 from model_def import Net
-
-# Import SMDataParallel PyTorch Modules
-import smdistributed.dataparallel.torch.torch_smddp
-
-
-# override dependency on mirrors provided by torch vision package
-# from torchvision 0.9.1, 2 candidate mirror website links will be added before "resources" items automatically
-# Reference PR: https://github.com/pytorch/vision/pull/3559
-TORCHVISION_VERSION = "0.9.1"
-if Version(torchvision.__version__) < Version(TORCHVISION_VERSION):
-    # Set path to data source and include checksum key to make sure data isn't corrupted
-    datasets.MNIST.resources = [
-        (
-            "https://sagemaker-sample-files.s3.amazonaws.com/datasets/image/MNIST/train-images-idx3-ubyte.gz",
-            "f68b3c2dcbeaaa9fbdd348bbdeb94873",
-        ),
-        (
-            "https://sagemaker-sample-files.s3.amazonaws.com/datasets/image/MNIST/train-labels-idx1-ubyte.gz",
-            "d53e105ee54ea40749a09fcbcd1e9432",
-        ),
-        (
-            "https://sagemaker-sample-files.s3.amazonaws.com/datasets/image/MNIST/t10k-images-idx3-ubyte.gz",
-            "9fb629c4189551a2d022fa330f9573f3",
-        ),
-        (
-            "https://sagemaker-sample-files.s3.amazonaws.com/datasets/image/MNIST/t10k-labels-idx1-ubyte.gz",
-            "ec29112dd5afa0611ce80d1b7f02629c",
-        ),
-    ]
-else:
-    # Set path to data source
-    datasets.MNIST.mirrors = ["https://sagemaker-sample-files.s3.amazonaws.com/datasets/image/MNIST/"]
-
 
 class CUDANotFoundException(Exception):
     pass
@@ -170,11 +136,12 @@ def main():
         help="Path for downloading " "the MNIST dataset",
     )
 
-    dist.init_process_group(backend="smddp")
+    dist.init_process_group(backend="nccl")
     args = parser.parse_args()
     args.world_size = dist.get_world_size()
     args.rank = rank = dist.get_rank()
     args.local_rank = local_rank = int(os.getenv("LOCAL_RANK", -1))
+    print(f'args.world_size {args.world_size} args.rank {args.rank} args.local_rank {args.local_rank}')
     args.lr = 1.0
     args.batch_size //= args.world_size // 8
     args.batch_size = max(args.batch_size, 1)
@@ -197,7 +164,8 @@ def main():
 
     torch.manual_seed(args.seed)
 
-    device = torch.device("cuda")
+    #device = torch.device("cuda")
+    device = local_rank
 
     # select a single rank per node to download data
     is_first_local_rank = local_rank == 0
@@ -210,7 +178,8 @@ def main():
                 [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
             ),
         )
-    dist.barrier()  # prevent other ranks from accessing the data early
+    print(f'rank {local_rank} waiting for barrier()')
+    #dist.barrier(device_ids=[local_rank])  # prevent other ranks from accessing the data early
     if not is_first_local_rank:
         train_dataset = datasets.MNIST(
             data_path,
